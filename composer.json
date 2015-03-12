@@ -1,0 +1,22 @@
+{
+    "name": "chriskite/php-kawana",
+    "description": "PHP Kawana Client",
+    "require-dev": {
+    },
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Chris Kite",
+        }
+    ],
+    "require": {
+    },
+    "autoload": {
+        "psr-0": {
+            "Kawana": "src/"
+        },
+        "files": [
+            "src/Kawana.php"
+        ]
+    }
+}
