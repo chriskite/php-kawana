@@ -7,23 +7,29 @@ class Client {
     const PASS = 0;
     const CAPTCHA = 1;
     const BLOCK = 2;
+
+    protected $_captchaThresholds;
+    protected $_blockThresholds;
+    protected $_forgivenThreshold;
   
-    public function __construct($hostname, $port = null) {
+    public function __construct($hostname, $port = self::DEFAULT_PORT) {
         $this->_address = gethostbyname($hostname);
-        $this->_port = $port || DEFAULT_PORT;
+        $this->_port = $port;
     }
 
     public function setCaptchaThresholds($fiveMin, $hour, $day) {
+        $this->_captchaThresholds = [];
         $this->_setThresholds($this->_captchaThresholds, $fiveMin, $hour, $day);
     }
 
-    public function setBlockThreshold($fiveMin, $hour, $day) {
+    public function setBlockThresholds($fiveMin, $hour, $day) {
+        $this->_blockThresholds = [];
         $this->_setThresholds($this->_blockThresholds, $fiveMin, $hour, $day);
     }
 
     public function setForgivenThreshold($numForgiven) {
         if($numForgiven <= 0) {
-            throw new Exception("numForgiven cannot be negative or 0");
+            throw new \Exception("numForgiven cannot be <= 0");
         }
         $this->_forgivenThreshold = $numForgiven;
     }
@@ -36,12 +42,14 @@ class Client {
     *         always returns PASS if the $ip is whitelisted, else
     *         returns BLOCK if the $ip is blacklisted.
     */
-    public function logIP($ip, int $impactAmount) {
+    public function logIP($ip, $impactAmount) {
+        $this->_ensureThresholdsSet();
+
         // convert string like '127.0.0.1' to long
         if(is_string($ip)) { $ip = ip2long($ip); }
 
         if($impactAmount <= 0) {
-            throw new Exception("logIP impactAmount cannot be <= 0");
+            throw new \Exception("logIP impactAmount cannot be <= 0");
         }
 
         $cmd = 0x01; // kawana command byte for LogIP
@@ -58,12 +66,14 @@ class Client {
     *         always returns PASS if the $ip is whitelisted, else
     *         returns BLOCK if the $ip is blacklisted.
     */
-    public function forgiveIP($percent = 0.5) {
+    public function forgiveIP($ip, $percent = 0.5) {
+        $this->_ensureThresholdsSet();
+
         // convert string like '127.0.0.1' to long
         if(is_string($ip)) { $ip = ip2long($ip); }
 
         if($percent <= 0.0 || $percent > 1.0) {
-            throw new Exception("forgiveIP percent cannot be <= 0.0 or > 1.0");
+            throw new \Exception("forgiveIP percent cannot be <= 0.0 or > 1.0");
         }
 
         $fiveMin = $this->_captchaThresholds['fiveMin'];
@@ -80,11 +90,11 @@ class Client {
         $this->_setBlackWhite($ip, 1);
     }
 
-    public function blacklistIP($ip) {
+    public function unWhitelistIP($ip) {
         $this->_setBlackWhite($ip, 2);
     }
 
-    public function unWhitelistIP($ip) {
+    public function blacklistIP($ip) {
         $this->_setBlackWhite($ip, 3);
     }
 
@@ -95,8 +105,11 @@ class Client {
     protected function _setBlackWhite($ip, $modifier) {
         $validMods = [1, 2, 3, 4];
         if(!in_array($modifier, $validMods)) {
-            throw new Exception("Invalid BlackWhite modifier: $modifier");
+            throw new \Exception("Invalid BlackWhite modifier: $modifier");
         }
+
+        // convert string like '127.0.0.1' to long
+        if(is_string($ip)) { $ip = ip2long($ip); }
 
         $cmd = 0x03; // kawana command byte for BlackWhite
         $bytes = pack("CVC", $cmd, $ip, $modifier);
@@ -106,46 +119,47 @@ class Client {
     protected function _checkIPData($resp) {
         $result = unpack("V3impacts/Sforgiven/Cbw", $resp);
 
-        foreach(['impacts', 'forgiven', 'bw'] as $field) {
+        foreach(['impacts1', 'impacts2', 'impacts3', 'forgiven', 'bw'] as $field) {
             if(!isset($result[$field])) {
-                throw new Exception("Invalid response from server");
+                throw new \Exception("Invalid response from server");
             }
         }
 
         $maxImpacts = [
-            'fiveMin' => $result['impacts'][0],
-            'hour'    => $result['impacts'][1],
-            'day'     => $result['impacts'][2]
-        ]
+            'fiveMin' => $result['impacts1'],
+            'hour'    => $result['impacts2'],
+            'day'     => $result['impacts3']
+        ];
 
+        print_r($result);
         // check blacklist and whitelist
         if($result['bw'] & 0x01) {
-            return PASS;
+            return self::PASS;
         }
         if($result['bw'] & 0x02) {
-            return BLOCK;
+            return self::BLOCK;
         }
 
         // check block
         foreach($maxImpacts as $time => $impact) {
             if($impact >= $this->_blockThresholds[$time]) {
-                return BLOCK;
+                return self::BLOCK;
             }
         }
 
         // check captcha
         foreach($maxImpacts as $time => $impact) {
             if($impact >= $this->_captchaThresholds[$time]) {
-                return CAPTCHA;
+                return self::CAPTCHA;
             }
         }
 
         // check forgiven
         if($result['forgiven'] >= $this->_forgivenThreshold) {
-            return BLOCK;
+            return self::BLOCK;
         }
 
-        return PASS;
+        return self::PASS;
     }
 
     /*
@@ -187,13 +201,15 @@ class Client {
             $resp .= $r;
         }
 
+        socket_close($socket);
+
         return $resp;
     }
 
-    protected function _setThresholds($arr, $fiveMin, $hour, $day) {
+    protected function _setThresholds(&$arr, $fiveMin, $hour, $day) {
         foreach([$fiveMin, $hour, $day] as $threshold) {
             if($threshold < 0) {
-                throw new Exception("Threshold cannot be less than 0");
+                throw new \Exception("Threshold cannot be less than 0");
             }
         }
 
@@ -201,9 +217,21 @@ class Client {
         $arr['hour'] = $hour;
         $arr['day'] = $day;
     }
+
+    protected function _ensureThresholdsSet() {
+        if(empty($this->_blockThresholds)) {
+            throw new \Exception("Must call setBlockThresholds() before using client");
+        }
+        if(empty($this->_captchaThresholds)) {
+            throw new \Exception("Must call setCaptchaThresholds() before using client");
+        }
+        if(empty($this->_forgivenThreshold)) {
+            throw new \Exception("Must call setForgivenThreshold() before using client");
+        }
+    }
 }
 
 function throwSocketException($fnName, $socket) {
-    throw new Exception("$fnName() failed: " . socket_strerror(socket_last_error($socket)));
+    throw new \Exception("$fnName() failed: " . socket_strerror(socket_last_error($socket)));
 
 }
