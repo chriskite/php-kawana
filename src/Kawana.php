@@ -8,30 +8,30 @@ class Client {
     const CAPTCHA = 1;
     const BLOCK = 2;
 
-    protected $_captchaThresholds;
-    protected $_blockThresholds;
-    protected $_forgivenThreshold;
+    protected $captchaThresholds;
+    protected $blockThresholds;
+    protected $forgivenThreshold;
   
     public function __construct($hostname, $port = self::DEFAULT_PORT) {
-        $this->_address = gethostbyname($hostname);
-        $this->_port = $port;
+        $this->address = $hostname;
+        $this->port = $port;
     }
 
     public function setCaptchaThresholds($fiveMin, $hour, $day) {
-        $this->_captchaThresholds = [];
-        $this->_setThresholds($this->_captchaThresholds, $fiveMin, $hour, $day);
+        $this->captchaThresholds = [];
+        $this->setThresholds($this->captchaThresholds, $fiveMin, $hour, $day);
     }
 
     public function setBlockThresholds($fiveMin, $hour, $day) {
-        $this->_blockThresholds = [];
-        $this->_setThresholds($this->_blockThresholds, $fiveMin, $hour, $day);
+        $this->blockThresholds = [];
+        $this->setThresholds($this->blockThresholds, $fiveMin, $hour, $day);
     }
 
     public function setForgivenThreshold($numForgiven) {
         if($numForgiven <= 0) {
-            throw new \Exception("numForgiven cannot be <= 0");
+            throw new \InvalidArgumentException("numForgiven cannot be <= 0");
         }
-        $this->_forgivenThreshold = $numForgiven;
+        $this->forgivenThreshold = $numForgiven;
     }
 
     /*
@@ -43,19 +43,19 @@ class Client {
     *         returns BLOCK if the $ip is blacklisted.
     */
     public function logIP($ip, $impactAmount) {
-        $this->_ensureThresholdsSet();
+        $this->ensureThresholdsSet();
 
         // convert string like '127.0.0.1' to long
         if(is_string($ip)) { $ip = ip2long($ip); }
 
         if($impactAmount <= 0) {
-            throw new \Exception("logIP impactAmount cannot be <= 0");
+            throw new \InvalidArgumentException("logIP impactAmount cannot be <= 0");
         }
 
         $cmd = 0x01; // kawana command byte for LogIP
         $bytes = pack("CVV", $cmd, $ip, $impactAmount);
-        $resp = $this->_sendAndRecv($bytes);
-        return $this->_checkIPData($resp);
+        $resp = $this->sendAndRecv($bytes);
+        return $this->checkIPData($resp);
     }
 
     /*
@@ -67,45 +67,45 @@ class Client {
     *         returns BLOCK if the $ip is blacklisted.
     */
     public function forgiveIP($ip, $percent = 0.5) {
-        $this->_ensureThresholdsSet();
+        $this->ensureThresholdsSet();
 
         // convert string like '127.0.0.1' to long
         if(is_string($ip)) { $ip = ip2long($ip); }
 
         if($percent <= 0.0 || $percent > 1.0) {
-            throw new \Exception("forgiveIP percent cannot be <= 0.0 or > 1.0");
+            throw new \InvalidArgumentException("forgiveIP percent cannot be <= 0.0 or > 1.0");
         }
 
-        $fiveMin = $this->_captchaThresholds['fiveMin'];
-        $hour = $this->_captchaThresholds['hour'];
-        $day = $this->_captchaThresholds['day'];
+        $fiveMin = $this->captchaThresholds['fiveMin'];
+        $hour = $this->captchaThresholds['hour'];
+        $day = $this->captchaThresholds['day'];
 
         $cmd = 0x02; // kawana command byte for ForgiveIP
         $bytes = pack("CVVVV", $cmd, $ip, $fiveMin, $hour, $day);
-        $resp = $this->_sendAndRecv($bytes);
-        return $this->_checkIPData($resp);
+        $resp = $this->sendAndRecv($bytes);
+        return $this->checkIPData($resp);
     }
 
     public function whitelistIP($ip) {
-        $this->_setBlackWhite($ip, 1);
+        $this->setBlackWhite($ip, 1);
     }
 
     public function unWhitelistIP($ip) {
-        $this->_setBlackWhite($ip, 2);
+        $this->setBlackWhite($ip, 2);
     }
 
     public function blacklistIP($ip) {
-        $this->_setBlackWhite($ip, 3);
+        $this->setBlackWhite($ip, 3);
     }
 
     public function unBlacklistIP($ip) {
-        $this->_setBlackWhite($ip, 4);
+        $this->setBlackWhite($ip, 4);
     }
 
-    protected function _setBlackWhite($ip, $modifier) {
+    protected function setBlackWhite($ip, $modifier) {
         $validMods = [1, 2, 3, 4];
         if(!in_array($modifier, $validMods)) {
-            throw new \Exception("Invalid BlackWhite modifier: $modifier");
+            throw new \InvalidArgumentException("Invalid BlackWhite modifier: $modifier");
         }
 
         // convert string like '127.0.0.1' to long
@@ -113,10 +113,10 @@ class Client {
 
         $cmd = 0x03; // kawana command byte for BlackWhite
         $bytes = pack("CVC", $cmd, $ip, $modifier);
-        $this->_sendAndRecv($bytes);
+        $this->sendAndRecv($bytes);
     }
 
-    protected function _checkIPData($resp) {
+    protected function checkIPData($resp) {
         $result = unpack("V3impacts/Sforgiven/Cbw", $resp);
 
         foreach(['impacts1', 'impacts2', 'impacts3', 'forgiven', 'bw'] as $field) {
@@ -142,20 +142,20 @@ class Client {
 
         // check block
         foreach($maxImpacts as $time => $impact) {
-            if($impact >= $this->_blockThresholds[$time]) {
+            if($impact >= $this->blockThresholds[$time]) {
                 return self::BLOCK;
             }
         }
 
         // check captcha
         foreach($maxImpacts as $time => $impact) {
-            if($impact >= $this->_captchaThresholds[$time]) {
+            if($impact >= $this->captchaThresholds[$time]) {
                 return self::CAPTCHA;
             }
         }
 
         // check forgiven
-        if($result['forgiven'] >= $this->_forgivenThreshold) {
+        if($result['forgiven'] >= $this->forgivenThreshold) {
             return self::BLOCK;
         }
 
@@ -165,7 +165,7 @@ class Client {
     /*
      * @return string response bytes
      */
-    protected function _sendAndRecv($bytes) {
+    protected function sendAndRecv($bytes) {
         $responseLength = 15; // kawana response is 15 bytes
 
         // create socket
@@ -175,7 +175,7 @@ class Client {
         }
 
         // connect to kawana server
-        $connected = socket_connect($socket, $this->_address, $this->_port);
+        $connected = socket_connect($socket, $this->address, $this->port);
         if ($connected === false) {
             throwSocketException('socket_connect', $socket);
         } 
@@ -206,10 +206,10 @@ class Client {
         return $resp;
     }
 
-    protected function _setThresholds(&$arr, $fiveMin, $hour, $day) {
+    protected function setThresholds(&$arr, $fiveMin, $hour, $day) {
         foreach([$fiveMin, $hour, $day] as $threshold) {
             if($threshold < 0) {
-                throw new \Exception("Threshold cannot be less than 0");
+                throw new \InvalidArgumentException("Threshold cannot be less than 0");
             }
         }
 
@@ -218,14 +218,14 @@ class Client {
         $arr['day'] = $day;
     }
 
-    protected function _ensureThresholdsSet() {
-        if(empty($this->_blockThresholds)) {
+    protected function ensureThresholdsSet() {
+        if(empty($this->blockThresholds)) {
             throw new \Exception("Must call setBlockThresholds() before using client");
         }
-        if(empty($this->_captchaThresholds)) {
+        if(empty($this->captchaThresholds)) {
             throw new \Exception("Must call setCaptchaThresholds() before using client");
         }
-        if(empty($this->_forgivenThreshold)) {
+        if(empty($this->forgivenThreshold)) {
             throw new \Exception("Must call setForgivenThreshold() before using client");
         }
     }
