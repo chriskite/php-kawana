@@ -11,10 +11,12 @@ class Client {
     protected $captchaThresholds;
     protected $blockThresholds;
     protected $forgivenThreshold;
+    protected $readTimeout;
   
     public function __construct($hostname, $port = self::DEFAULT_PORT) {
         $this->address = $hostname;
         $this->port = $port;
+        $this->readTimeout = null;
     }
 
     public function setCaptchaThresholds($fiveMin, $hour, $day) {
@@ -32,6 +34,18 @@ class Client {
             throw new \InvalidArgumentException("numForgiven cannot be <= 0");
         }
         $this->forgivenThreshold = $numForgiven;
+    }
+
+    /*
+    *  Set the socket read timeout in milliseconds.
+    *  @param $milliseconds must be < 1000 and > 0
+    */
+    public function setReadTimeout($milliseconds) {
+        if($milliseconds >= 1000 || $milliseconds <= 0) {
+            throw new \InvalidArgumentException("milliseconds must be < 1000 and > 0");
+        }
+
+        $this->readTimeout = array("sec" => 0, "usec" => $milliseconds * 1000);
     }
 
     /*
@@ -170,8 +184,12 @@ class Client {
 
         // create socket
         $socket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
-        if ($socket === false) {
+        if($socket === false) {
             throwSocketException('socket_create', $socket);
+        }
+
+        if(null !== $this->readTimeout && !socket_set_option($socket,SOL_SOCKET, SO_RCVTIMEO, $this->readTimeout)) {
+            throwSocketException('socket_set_options', $socket);
         }
 
         // connect to kawana server
