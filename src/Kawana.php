@@ -145,7 +145,6 @@ class Client {
             'day'     => $result['impacts3']
         ];
 
-        print_r($result);
         // check blacklist and whitelist
         if($result['bw'] & 0x01) {
             return self::PASS;
