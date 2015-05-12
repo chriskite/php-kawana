@@ -192,7 +192,7 @@ class Client {
         }
 
         // connect to kawana server
-        $connected = socket_connect($socket, $this->address, $this->port);
+        $connected = @socket_connect($socket, $this->address, $this->port);
         if ($connected === false) {
             throwSocketException('socket_connect', $socket);
         } 
