@@ -11,12 +11,14 @@ class Client {
     protected $captchaThresholds;
     protected $blockThresholds;
     protected $forgivenThreshold;
-    protected $readTimeout;
+    protected $connTimeout; // float seconds
+    protected $readTimeout; // int microseconds
   
     public function __construct($hostname, $port = self::DEFAULT_PORT) {
         $this->address = $hostname;
         $this->port = $port;
-        $this->readTimeout = null;
+        $this->setReadTimeout(100); // default to 100ms read timeout
+        $this->setConnTimeout(50); // default to 50ms conn timeout
     }
 
     public function setCaptchaThresholds($fiveMin, $hour, $day) {
@@ -45,7 +47,19 @@ class Client {
             throw new \InvalidArgumentException("milliseconds must be < 1000 and > 0");
         }
 
-        $this->readTimeout = array("sec" => 0, "usec" => $milliseconds * 1000);
+        $this->readTimeout = $milliseconds * 1000; // convert to microseconds
+    }
+
+    /*
+    *  Set the socket connection timeout in milliseconds.
+    *  @param $milliseconds must be < 1000 and > 0
+    */
+    public function setConnTimeout($milliseconds) {
+        if($milliseconds >= 1000 || $milliseconds <= 0) {
+            throw new \InvalidArgumentException("milliseconds must be < 1000 and > 0");
+        }
+
+        $this->connTimeout = $milliseconds / 1000.0; // convert to float seconds
     }
 
     /*
@@ -181,46 +195,29 @@ class Client {
     protected function sendAndRecv($bytes) {
         $responseLength = 15; // kawana response is 15 bytes
 
-        // create socket
-        $socket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
-        if($socket === false) {
-            throwSocketException('socket_create', $socket);
-        }
-
-        if(null !== $this->readTimeout && !socket_set_option($socket,SOL_SOCKET, SO_RCVTIMEO, $this->readTimeout)) {
-            throwSocketException('socket_set_options', $socket);
-        }
-
         // connect to kawana server
-        $connected = @socket_connect($socket, $this->address, $this->port);
-        if ($connected === false) {
-            throwSocketException('socket_connect', $socket);
-        } 
+        $errno = 0;
+        $errstr = "";
+        $fd = @fsockopen($this->address, $this->port, $errno, $errstr, $this->connTimeout);
+        if($fd === false) throwSocketException('fsockopen', $errstr, $errno);
+
+        // set read/write timeout
+        if(@stream_set_timeout($fd, 0, $this->readTimeout) === false) throwSocketException('stream_set_timeout', "returned false");
 
         // write bytes to server
         $numBytes = strlen($bytes);
-        for($sent = 0; $sent < $numBytes;) {
-            $n = socket_write($socket, $bytes);
-            if($n === false) {
-                throwSocketException('socket_write', $socket);
-            }
-            $sent += $n;
-        }
+        $n = @fwrite($fd, $bytes);
+        if($n === false) throwSocketException('fwrite', "returned false");
+        if($n < $numBytes) throwSocketException('fwrite', "wrote $n instead of $numBytes bytes");
 
         // read response from server
-        $resp = "";
-        for($recvd = 0; $recvd < $responseLength;) {
-            $r = socket_read($socket, $responseLength);
-            if($r === false) {
-                throwSocketException('socket_read', $socket);
-            }
-            $recvd += strlen($r);
-            $resp .= $r;
-        }
+        $r = @fread($fd, $responseLength);
+        if($r === false) throwSocketException('fread', "returned false");
+        if(strlen($r) < $responseLength) throwSocketException('fread', "read " . strlen($r) . " instead of $responseLength bytes");
 
-        socket_close($socket);
+        @fclose($fd);
 
-        return $resp;
+        return $r;
     }
 
     protected function setThresholds(&$arr, $fiveMin, $hour, $day) {
@@ -248,7 +245,10 @@ class Client {
     }
 }
 
-function throwSocketException($fnName, $socket) {
-    throw new \Exception("$fnName() failed: " . socket_strerror(socket_last_error($socket)));
-
+function throwSocketException($fnName, $errstr, $errno = null) {
+    if($errno !== null) {
+        throw new \Exception("$fnName() failed with errno($errno): $errstr");
+    } else {
+        throw new \Exception("$fnName() failed: $errstr");
+    }
 }
