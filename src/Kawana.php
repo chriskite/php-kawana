@@ -8,6 +8,8 @@ class Client {
     const CAPTCHA = 1;
     const BLOCK = 2;
 
+    const MAX_IMPACT = 65536;
+
     protected $captchaThresholds;
     protected $blockThresholds;
     protected $forgivenThreshold;
@@ -110,6 +112,25 @@ class Client {
 
         $cmd = 0x02; // kawana command byte for ForgiveIP
         $bytes = pack("CVVVV", $cmd, $ip, $fiveMin, $hour, $day);
+        $resp = $this->sendAndRecv($bytes);
+        return $this->checkIPData($resp);
+    }
+
+    /*
+    * Sets the impact in Kawana to 0 for the specified IP by subtracting
+    * the maximum value for impact.
+    * @return one of PASS, CAPTCHA, or BLOCK based on the updated data.
+    *         always returns PASS if the $ip is whitelisted, else
+    *         returns BLOCK if the $ip is blacklisted.
+    */
+    public function totallyForgiveIP($ip) {
+        // convert string like '127.0.0.1' to long
+        if(is_string($ip)) { $ip = ip2long($ip); }
+
+        $max = self::MAX_IMPACT;
+
+        $cmd = 0x02; // kawana command byte for ForgiveIP
+        $bytes = pack("CVVVV", $cmd, $ip, $max, $max, $max);
         $resp = $this->sendAndRecv($bytes);
         return $this->checkIPData($resp);
     }
